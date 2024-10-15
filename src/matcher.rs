@@ -1,18 +1,21 @@
 //! The matcher: Can find substrings in a string that match any compiled regex
 
 #[cfg(feature = "no_std")]
-use std::prelude::*;
+use crate::std::collections::HashSet;
 
-use std::borrow::Cow;
-use std::cell::RefCell;
+#[cfg(not(feature = "no_std"))]
 use std::collections::HashSet;
-use std::fmt;
-use std::rc::Rc;
 
-use compile::{Range, Token};
-use ctype;
-use immut_vec::ImmutVec;
-use tree::{Node as TreeNode, *};
+extern crate alloc;
+use alloc::{borrow::Cow, boxed::Box, rc::Rc, vec, vec::Vec};
+use core::{cell::RefCell, fmt};
+
+use crate::{
+    compile::{Range, Token},
+    ctype,
+    immut_vec::ImmutVec,
+    tree::{Node as TreeNode, *},
+};
 
 /// A regex matcher, ready to match stuff
 #[derive(Clone)]
@@ -274,7 +277,7 @@ impl<'a> Node<'a> {
         self.repeated += 1;
         let mut parent = Rc::new(self);
         let mut empty = true;
-        for alternative in parent.tree[parent.node].children(&parent.tree) {
+        for alternative in parent.tree[parent.node].children(parent.tree) {
             if let Some(node) = parent.tree[alternative].child {
                 empty = false;
                 branches.push(Self::prepare(Self {
@@ -292,7 +295,7 @@ impl<'a> Node<'a> {
             }
         }
         if empty {
-            let mut parent = Rc::get_mut(&mut parent)
+            let parent = Rc::get_mut(&mut parent)
                 .expect("group empty but still there's a dangling reference");
             for &open in &[true, false] {
                 parent.prev = parent.prev.push(GroupEvent { open, id, offset });
@@ -450,7 +453,7 @@ impl<'a> Node<'a> {
             let mut node = current.node();
             if node.token == Token::Alternative {
                 // Don't explore other alternatives
-                next = current.parent.as_ref().map(|node| &**node);
+                next = current.parent.as_deref();
                 node = &self.tree[node.parent.expect("found root alternative")];
             }
             if let Token::Group(_) = node.token {
@@ -462,7 +465,7 @@ impl<'a> Node<'a> {
             if node.next_sibling.is_some() {
                 break;
             }
-            next = current.parent.as_ref().map(|node| &**node);
+            next = current.parent.as_deref();
         }
         next.and_then(|node| self.tree[node.node].next_sibling)
             .is_none()
@@ -629,7 +632,7 @@ impl<'a> PosixRegexMatcher<'a> {
                                     && list
                                         .iter()
                                         .any(|c| c.matches(next, self.base.case_insensitive))
-                                        == !invert
+                                        != invert
                             } else {
                                 false
                             }
@@ -693,7 +696,7 @@ mod tests {
     use self::test::Bencher;
 
     use super::*;
-    use PosixRegexBuilder;
+    use crate::PosixRegexBuilder;
 
     // FIXME: Workaround to coerce a Box<[T; N]> into a Box<[T]>. Use type
     // ascription when stabilized.

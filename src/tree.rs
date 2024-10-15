@@ -1,10 +1,12 @@
-#[cfg(feature = "no_std")]
-use std::prelude::*;
+use core::{
+    fmt,
+    ops::{Index, IndexMut},
+};
 
-use std::fmt;
-use std::ops::{Index, IndexMut};
+extern crate alloc;
+use alloc::{boxed::Box, vec::Vec};
 
-use compile::{Range, Token};
+use crate::compile::{Range, Token};
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct NodeId(usize);
@@ -198,6 +200,8 @@ impl fmt::Debug for Tree {
 
 #[cfg(test)]
 mod tests {
+    use alloc::format;
+
     use super::*;
 
     fn sanity_check(tree: &Tree) {
