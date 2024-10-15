@@ -1,7 +1,7 @@
-#[cfg(feature = "no_std")]
-use std::prelude::*;
+use core::cell::RefCell;
 
-use std::cell::RefCell;
+extern crate alloc;
+use alloc::vec::Vec;
 
 pub struct ImmutVecItem<T> {
     prev: Option<usize>,

@@ -2,13 +2,16 @@
 //! Produces a matcher ready to match input.
 
 #[cfg(feature = "no_std")]
-use std::prelude::*;
+use crate::std::collections::HashMap;
 
-use std::borrow::Cow;
+#[cfg(not(feature = "no_std"))]
 use std::collections::HashMap;
-use std::fmt;
-use tree::*;
-use {ctype, PosixRegex};
+
+use crate::{ctype, tree::*, PosixRegex};
+
+extern crate alloc;
+use alloc::{borrow::Cow, vec, vec::Vec};
+use core::fmt;
 
 /// Repetition bounds, for example + is (1, None), and ? is (0, Some(1))
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -317,7 +320,7 @@ impl<'a> PosixRegexBuilder<'a> {
                     if self
                         .input
                         .first()
-                        .map(|&c| (c as char).is_digit(10))
+                        .map(|&c| c.is_ascii_digit())
                         .unwrap_or(false) =>
                 {
                     let id = self.take_int()?.unwrap();
@@ -381,6 +384,8 @@ impl<'a> PosixRegexBuilder<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use alloc::{format, string::String};
 
     fn compile(input: &[u8]) -> String {
         format!(
