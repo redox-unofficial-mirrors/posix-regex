@@ -3,7 +3,6 @@ use core::{
     ops::{Index, IndexMut},
 };
 
-extern crate alloc;
 use alloc::{boxed::Box, vec::Vec};
 
 use crate::compile::{Range, Token};
@@ -42,7 +41,7 @@ impl fmt::Debug for Node {
 }
 
 pub struct NodeIter<'a>(&'a Tree, Option<NodeId>);
-impl<'a> Iterator for NodeIter<'a> {
+impl Iterator for NodeIter<'_> {
     type Item = NodeId;
     fn next(&mut self) -> Option<Self::Item> {
         if let Some(next) = self.1 {

@@ -1,12 +1,11 @@
 //! The matcher: Can find substrings in a string that match any compiled regex
 
 #[cfg(feature = "no_std")]
-use crate::std::collections::HashSet;
+use alloc::collections::BTreeSet as HashSet;
 
 #[cfg(not(feature = "no_std"))]
 use std::collections::HashSet;
 
-extern crate alloc;
 use alloc::{borrow::Cow, boxed::Box, rc::Rc, vec, vec::Vec};
 use core::{cell::RefCell, fmt};
 
@@ -95,6 +94,7 @@ impl<'a> PosixRegex<'a> {
     }
     /// Match the string starting at the current position. This does not find
     /// substrings.
+    #[allow(clippy::type_complexity)]
     pub fn matches_exact(&self, input: &[u8]) -> Option<Box<[Option<(usize, usize)>]>> {
         let mut matcher = PosixRegexMatcher {
             base: self,
@@ -124,6 +124,7 @@ impl<'a> PosixRegex<'a> {
         }
     }
     /// Match any substrings in the string, but optionally no more than `max`
+    #[allow(clippy::type_complexity)]
     pub fn matches(
         &self,
         input: &[u8],
@@ -215,7 +216,7 @@ struct Node<'a> {
     repeated: u32,
     backref: Option<BackRef>,
 }
-impl<'a> fmt::Debug for Node<'a> {
+impl fmt::Debug for Node<'_> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let mut range = self.node().range;
         range.0 = range.0.saturating_sub(self.repeated);
@@ -478,7 +479,7 @@ struct PosixRegexMatcher<'a> {
     offset: usize,
     max_groups: usize,
 }
-impl<'a> PosixRegexMatcher<'a> {
+impl PosixRegexMatcher<'_> {
     fn expand<'b>(
         &mut self,
         skip: &mut HashSet<NodeId>,
@@ -514,6 +515,7 @@ impl<'a> PosixRegexMatcher<'a> {
         insert
     }
 
+    #[allow(clippy::type_complexity)]
     fn matches_exact(&mut self, mut branches: Vec<Node>) -> Option<Box<[Option<(usize, usize)>]>> {
         // Whether or not any branch, at any point, got fully explored. This
         // means at least one path of the regex successfully completed!
