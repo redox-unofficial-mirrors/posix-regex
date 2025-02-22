@@ -2,16 +2,15 @@
 //! Produces a matcher ready to match input.
 
 #[cfg(feature = "no_std")]
-use crate::std::collections::HashMap;
+use alloc::collections::BTreeMap as HashMap;
 
 #[cfg(not(feature = "no_std"))]
 use std::collections::HashMap;
 
-use crate::{ctype, tree::*, PosixRegex};
-
-extern crate alloc;
 use alloc::{borrow::Cow, vec, vec::Vec};
 use core::fmt;
+
+use crate::{ctype, tree::*, PosixRegex};
 
 /// Repetition bounds, for example + is (1, None), and ? is (0, Some(1))
 #[derive(Clone, Copy, PartialEq, Eq)]
