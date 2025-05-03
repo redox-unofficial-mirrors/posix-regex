@@ -157,7 +157,7 @@ impl<'a> PosixRegexBuilder<'a> {
     }
     /// Use POSIX extended regex
     pub fn extended(mut self, extended: bool) -> Self {
-        self.extended = true;
+        self.extended = extended;
         self
     }
     /// "Compile" this regex to a struct ready to match input
