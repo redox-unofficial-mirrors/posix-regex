@@ -117,6 +117,7 @@ pub struct PosixRegexBuilder<'a> {
     classes: HashMap<&'a [u8], fn(u8) -> bool>,
     group_id: usize,
     builder: TreeBuilder,
+    extended: bool,
 }
 impl<'a> PosixRegexBuilder<'a> {
     /// Create a new instance that is ready to parse the regex `input`
@@ -126,6 +127,7 @@ impl<'a> PosixRegexBuilder<'a> {
             classes: HashMap::new(),
             group_id: 1,
             builder: TreeBuilder::default(),
+            extended: false,
         }
     }
     /// Add a custom collation class, for use within square brackets (such as `[[:digit:]]`)
@@ -151,6 +153,11 @@ impl<'a> PosixRegexBuilder<'a> {
         self.classes.insert(b"upper", ctype::is_upper);
         self.classes.insert(b"xdigit", ctype::is_xdigit);
 
+        self
+    }
+    /// Use POSIX extended regex
+    pub fn extended(mut self, extended: bool) -> Self {
+        self.extended = true;
         self
     }
     /// "Compile" this regex to a struct ready to match input
@@ -203,9 +210,9 @@ impl<'a> PosixRegexBuilder<'a> {
             let new = match c {
                 b'*' => Some((1, Range(0, None))),
                 b'\\' => match self.input.get(1) {
-                    Some(b'?') => Some((2, Range(0, Some(1)))),
-                    Some(b'+') => Some((2, Range(1, None))),
-                    Some(b'{') => {
+                    Some(b'?') if !self.extended => Some((2, Range(0, Some(1)))),
+                    Some(b'+') if !self.extended => Some((2, Range(1, None))),
+                    Some(b'{') if !self.extended => {
                         self.consume(2);
                         let first = self.take_int()?.ok_or(Error::EmptyRepetition)?;
                         let mut second = Some(first);
@@ -228,6 +235,29 @@ impl<'a> PosixRegexBuilder<'a> {
                     }
                     _ => None,
                 },
+                b'?' if self.extended => Some((1, Range(0, Some(1)))),
+                b'+' if self.extended => Some((1, Range(1, None))),
+                b'{' if self.extended => {
+                    self.consume(1);
+                    let first = self.take_int()?.ok_or(Error::EmptyRepetition)?;
+                    let mut second = Some(first);
+                    if let Some(b',') = self.input.first() {
+                        self.consume(1);
+                        second = self.take_int()?;
+                    }
+                    if self.input.first() == Some(&b'}') {
+                        self.consume(1);
+                    } else if self.input.starts_with(br"\}") {
+                        self.consume(2);
+                    } else {
+                        return Err(Error::UnclosedRepetition);
+                    }
+                    if second.map(|second| first > second).unwrap_or(false) {
+                        return Err(Error::IllegalRange);
+                    }
+                    range = Range(first, second);
+                    None
+                }
                 _ => None,
             };
             if let Some((consume, new)) = new {
@@ -329,7 +359,7 @@ impl<'a> PosixRegexBuilder<'a> {
                     Token::BackRef(id)
                 }
                 b'\\' => match self.next()? {
-                    b'(' => {
+                    b'(' if !self.extended => {
                         let id = self.group_id;
                         self.group_id += 1;
                         let checkpoint = self.builder.checkpoint();
@@ -340,8 +370,8 @@ impl<'a> PosixRegexBuilder<'a> {
                         self.builder.finish_internal();
                         continue;
                     }
-                    b')' => break,
-                    b'|' => {
+                    b')' if !self.extended => break,
+                    b'|' if !self.extended => {
                         self.builder.finish_internal();
                         self.builder
                             .start_internal(Token::Alternative, Range(1, Some(1)));
@@ -370,6 +400,24 @@ impl<'a> PosixRegexBuilder<'a> {
                     b't' => Token::Char(b'\t'),
                     c => Token::Char(c),
                 },
+                b'(' if self.extended => {
+                    let id = self.group_id;
+                    self.group_id += 1;
+                    let checkpoint = self.builder.checkpoint();
+                    self.parse()?;
+                    let range = self.parse_range()?;
+                    self.builder
+                        .start_internal_at(checkpoint, Token::Group(id), range);
+                    self.builder.finish_internal();
+                    continue;
+                }
+                b')' if self.extended => break,
+                b'|' if self.extended => {
+                    self.builder.finish_internal();
+                    self.builder
+                        .start_internal(Token::Alternative, Range(1, Some(1)));
+                    continue;
+                }
                 c => Token::Char(c),
             };
             let range = self.parse_range()?;
@@ -610,6 +658,243 @@ Root 1..1
     fn backref() {
         assert_eq!(
             compile(br"\([abc]\)\1"),
+            "\
+Root 1..1
+  Alternative 1..1
+    Group(1) 1..1
+      Alternative 1..1
+        {invert: false, ['a', 'b', 'c']} 1..1
+    \\1 1..1
+"
+        )
+    }
+
+    fn compile_extended(input: &[u8]) -> String {
+        format!(
+            "{:?}",
+            PosixRegexBuilder::new(input)
+                .with_default_classes()
+                .extended(true)
+                .compile_tokens()
+                .expect("error compiling regex")
+        )
+    }
+
+    #[test]
+    fn basic_extended() {
+        assert_eq!(
+            compile_extended(b"abc"),
+            "\
+Root 1..1
+  Alternative 1..1
+    'a' 1..1
+    'b' 1..1
+    'c' 1..1
+"
+        );
+    }
+    #[test]
+    fn groups_extended() {
+        assert_eq!(
+            compile_extended(br"(abc|bcd|cde)"),
+            "\
+Root 1..1
+  Alternative 1..1
+    Group(1) 1..1
+      Alternative 1..1
+        'a' 1..1
+        'b' 1..1
+        'c' 1..1
+      Alternative 1..1
+        'b' 1..1
+        'c' 1..1
+        'd' 1..1
+      Alternative 1..1
+        'c' 1..1
+        'd' 1..1
+        'e' 1..1
+"
+        );
+        assert_eq!(
+            compile_extended(br"(abc|(bcd|cde))"),
+            "\
+Root 1..1
+  Alternative 1..1
+    Group(1) 1..1
+      Alternative 1..1
+        'a' 1..1
+        'b' 1..1
+        'c' 1..1
+      Alternative 1..1
+        Group(2) 1..1
+          Alternative 1..1
+            'b' 1..1
+            'c' 1..1
+            'd' 1..1
+          Alternative 1..1
+            'c' 1..1
+            'd' 1..1
+            'e' 1..1
+"
+        );
+    }
+    #[test]
+    fn words_extended() {
+        assert_eq!(
+            compile_extended(br"\<word\>"),
+            "\
+Root 1..1
+  Alternative 1..1
+    < 1..1
+    'w' 1..1
+    'o' 1..1
+    'r' 1..1
+    'd' 1..1
+    > 1..1
+"
+        );
+    }
+
+    #[test]
+    fn repetitions_extended() {
+        assert_eq!(
+            compile_extended(br"yeee*"),
+            "\
+Root 1..1
+  Alternative 1..1
+    'y' 1..1
+    'e' 1..1
+    'e' 1..1
+    'e' 0..
+"
+        );
+        assert_eq!(
+            compile_extended(br"yee?"),
+            "\
+Root 1..1
+  Alternative 1..1
+    'y' 1..1
+    'e' 1..1
+    'e' 0..1
+"
+        );
+        assert_eq!(
+            compile_extended(br"yee+"),
+            "\
+Root 1..1
+  Alternative 1..1
+    'y' 1..1
+    'e' 1..1
+    'e' 1..
+"
+        );
+        assert_eq!(
+            compile_extended(br"ye{2}"),
+            "\
+Root 1..1
+  Alternative 1..1
+    'y' 1..1
+    'e' 2..2
+"
+        );
+        assert_eq!(
+            compile_extended(br"ye{2,}"),
+            "\
+Root 1..1
+  Alternative 1..1
+    'y' 1..1
+    'e' 2..
+"
+        );
+        assert_eq!(
+            compile_extended(br"ye{2,3}"),
+            "\
+Root 1..1
+  Alternative 1..1
+    'y' 1..1
+    'e' 2..3
+"
+        );
+    }
+    #[test]
+    fn bracket_extended() {
+        assert_eq!(
+            compile_extended(b"[abc]"),
+            "\
+Root 1..1
+  Alternative 1..1
+    {invert: false, ['a', 'b', 'c']} 1..1
+"
+        );
+        assert_eq!(
+            compile_extended(b"[^abc]"),
+            "\
+Root 1..1
+  Alternative 1..1
+    {invert: true, ['a', 'b', 'c']} 1..1
+"
+        );
+        assert_eq!(
+            compile_extended(b"[]] [^]]"),
+            "\
+Root 1..1
+  Alternative 1..1
+    {invert: false, [']']} 1..1
+    ' ' 1..1
+    {invert: true, [']']} 1..1
+"
+        );
+        assert_eq!(
+            compile_extended(b"[0-3] [a-c] [-1] [1-]"),
+            "\
+Root 1..1
+  Alternative 1..1
+    {invert: false, ['0', '1', '2', '3']} 1..1
+    ' ' 1..1
+    {invert: false, ['a', 'b', 'c']} 1..1
+    ' ' 1..1
+    {invert: false, ['-', '1']} 1..1
+    ' ' 1..1
+    {invert: false, ['1', '-']} 1..1
+"
+        );
+        assert_eq!(
+            compile_extended(b"[[.-.]-/]"),
+            "\
+Root 1..1
+  Alternative 1..1
+    {invert: false, ['-', '.', '/']} 1..1
+"
+        );
+        assert_eq!(
+            compile_extended(b"[[:digit:][:upper:]]"),
+            format!(
+                "\
+Root 1..1
+  Alternative 1..1
+    {{invert: false, [{:p}, {:p}]}} 1..1
+",
+                ctype::is_digit as fn(u8) -> bool,
+                ctype::is_upper as fn(u8) -> bool
+            )
+        );
+    }
+    #[test]
+    fn newline_extended() {
+        assert_eq!(
+            compile_extended(br"\r\n"),
+            "\
+Root 1..1
+  Alternative 1..1
+    '\\r' 1..1
+    '\\n' 1..1
+"
+        );
+    }
+    #[test]
+    fn backref_extended() {
+        assert_eq!(
+            compile_extended(br"([abc])\1"),
             "\
 Root 1..1
   Alternative 1..1
