@@ -292,18 +292,21 @@ impl<'a> PosixRegexBuilder<'a> {
                             // TODO: Handle collation characters properly,
                             // because currently idk what they are and only
                             // have the behavior of `grep` to go on.
-                            match self.next()? {
-                                b'.' => {
+                            match self.input.first() {
+                                Some(b'.') => {
+                                    self.consume(1);
                                     c = self.next()?;
                                     self.expect(b'.')?;
                                     self.expect(b']')?;
                                 }
-                                b'=' => {
+                                Some(b'=') => {
+                                    self.consume(1);
                                     c = self.next()?;
                                     self.expect(b'=')?;
                                     self.expect(b']')?;
                                 }
-                                b':' => {
+                                Some(b':') => {
+                                    self.consume(1);
                                     let end = self
                                         .input
                                         .iter()
@@ -320,7 +323,7 @@ impl<'a> PosixRegexBuilder<'a> {
                                     list.push(Collation::Class(class));
                                     push = false;
                                 }
-                                _ => return Err(Error::UnknownCollation),
+                                _ => ()
                             }
                         }
 
@@ -719,6 +722,33 @@ Root 1..1
   Alternative 1..1
     'a' 1..1
     ')' 1..1
+"
+        );
+    }
+    #[test]
+    fn bracket_nesting() {
+        assert_eq!(
+            compile(br"[][]"),
+            "\
+Root 1..1
+  Alternative 1..1
+    {invert: false, [']', '[']} 1..1
+"
+        );
+    }
+    #[test]
+    fn bracket_range() {
+        // NOTE: This differs from the os-test bracket-range test,
+        // but explicitly conforms to the POSIX spec which requires
+        // that ] come before - if they're both intended to be
+        // inside a bracket expression.
+        assert_eq!(
+            compile(br"[[Y-]]"),
+            "\
+Root 1..1
+  Alternative 1..1
+    {invert: false, ['[', 'Y', '-']} 1..1
+    ']' 1..1
 "
         );
     }
