@@ -346,13 +346,14 @@ impl<'a> PosixRegexBuilder<'a> {
                     Token::OneOf { invert, list }
                 }
                 b'\\'
-                    if self
-                        .input
-                        .first()
-                        .map(|&c| c.is_ascii_digit())
-                        .unwrap_or(false) =>
+                    if !self.extended
+                        && self
+                            .input
+                            .first()
+                            .map(|&c| (b'1'..=b'9').contains(&c))
+                            .unwrap_or(false) =>
                 {
-                    let id = self.take_int()?.unwrap();
+                    let id = self.next().map(|c| (c - b'0') as u32).unwrap();
                     if (id as usize) >= self.group_id {
                         return Err(Error::InvalidBackRef(id));
                     }
@@ -681,6 +682,35 @@ Root 1..1
         )
     }
     #[test]
+    fn backref_is_single_digit() {
+        assert_eq!(
+            compile(br"\([abc]\)\12"),
+            "\
+Root 1..1
+  Alternative 1..1
+    Group(1) 1..1
+      Alternative 1..1
+        {invert: false, ['a', 'b', 'c']} 1..1
+    \\1 1..1
+    '2' 1..1
+"
+        )
+    }
+    #[test]
+    fn backref_not_zero() {
+        assert_eq!(
+            compile(br"\([abc]\)\0"),
+            "\
+Root 1..1
+  Alternative 1..1
+    Group(1) 1..1
+      Alternative 1..1
+        {invert: false, ['a', 'b', 'c']} 1..1
+    '0' 1..1
+"
+        )
+    }
+    #[test]
     fn dangling_rparen() {
         assert_eq!(
             compile(br"a\)"),
@@ -917,6 +947,9 @@ Root 1..1
     }
     #[test]
     fn backref_extended() {
+        // NOTE 1: Backrefs don't exist in EREs, only BREs.
+        // NOTE 2: The behaviour of backslash-escaping a
+        //         non-special char is undefined in the POSIX spec.
         assert_eq!(
             compile_extended(br"([abc])\1"),
             "\
@@ -925,7 +958,7 @@ Root 1..1
     Group(1) 1..1
       Alternative 1..1
         {invert: false, ['a', 'b', 'c']} 1..1
-    \\1 1..1
+    '1' 1..1
 "
         )
     }
