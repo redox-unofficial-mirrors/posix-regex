@@ -167,7 +167,7 @@ impl<'a> PosixRegexBuilder<'a> {
     }
     pub fn compile_tokens(mut self) -> Result<Tree, Error> {
         self.builder.start_internal(Token::Root, Range(1, Some(1)));
-        self.parse()?;
+        self.parse(false)?;
         self.builder.finish_internal();
         Ok(self.builder.finish())
     }
@@ -267,7 +267,7 @@ impl<'a> PosixRegexBuilder<'a> {
         }
         Ok(range)
     }
-    fn parse(&mut self) -> Result<(), Error> {
+    fn parse(&mut self, in_subgroup: bool) -> Result<(), Error> {
         self.builder
             .start_internal(Token::Alternative, Range(1, Some(1)));
         while let Ok(c) = self.next() {
@@ -363,14 +363,20 @@ impl<'a> PosixRegexBuilder<'a> {
                         let id = self.group_id;
                         self.group_id += 1;
                         let checkpoint = self.builder.checkpoint();
-                        self.parse()?;
+                        self.parse(true)?;
                         let range = self.parse_range()?;
                         self.builder
                             .start_internal_at(checkpoint, Token::Group(id), range);
                         self.builder.finish_internal();
                         continue;
                     }
-                    b')' if !self.extended => break,
+                    b')' if !self.extended => {
+                        if in_subgroup {
+                            break;
+                        } else {
+                            Token::Char(b')')
+                        }
+                    }
                     b'|' if !self.extended => {
                         self.builder.finish_internal();
                         self.builder
@@ -404,14 +410,20 @@ impl<'a> PosixRegexBuilder<'a> {
                     let id = self.group_id;
                     self.group_id += 1;
                     let checkpoint = self.builder.checkpoint();
-                    self.parse()?;
+                    self.parse(true)?;
                     let range = self.parse_range()?;
                     self.builder
                         .start_internal_at(checkpoint, Token::Group(id), range);
                     self.builder.finish_internal();
                     continue;
                 }
-                b')' if self.extended => break,
+                b')' if self.extended => {
+                    if in_subgroup {
+                        break;
+                    } else {
+                        Token::Char(b')')
+                    }
+                }
                 b'|' if self.extended => {
                     self.builder.finish_internal();
                     self.builder
@@ -668,6 +680,18 @@ Root 1..1
 "
         )
     }
+    #[test]
+    fn dangling_rparen() {
+        assert_eq!(
+            compile(br"a\)"),
+            "\
+Root 1..1
+  Alternative 1..1
+    'a' 1..1
+    ')' 1..1
+"
+        );
+    }
 
     fn compile_extended(input: &[u8]) -> String {
         format!(
@@ -904,5 +928,17 @@ Root 1..1
     \\1 1..1
 "
         )
+    }
+    #[test]
+    fn dangling_rparen_extended() {
+        assert_eq!(
+            compile_extended(br"a)"),
+            "\
+Root 1..1
+  Alternative 1..1
+    'a' 1..1
+    ')' 1..1
+"
+        );
     }
 }
