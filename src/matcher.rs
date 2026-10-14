@@ -712,7 +712,7 @@ mod tests {
         }
     }
 
-    fn compile(regex: &str) -> PosixRegex {
+    fn compile(regex: &str) -> PosixRegex<'_> {
         PosixRegexBuilder::new(regex.as_bytes())
             .with_default_classes()
             .compile()
