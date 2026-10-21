@@ -167,7 +167,7 @@ impl<'a> PosixRegexBuilder<'a> {
     }
     pub fn compile_tokens(mut self) -> Result<Tree, Error> {
         self.builder.start_internal(Token::Root, Range(1, Some(1)));
-        self.parse()?;
+        self.parse(false)?;
         self.builder.finish_internal();
         Ok(self.builder.finish())
     }
@@ -267,7 +267,7 @@ impl<'a> PosixRegexBuilder<'a> {
         }
         Ok(range)
     }
-    fn parse(&mut self) -> Result<(), Error> {
+    fn parse(&mut self, in_subgroup: bool) -> Result<(), Error> {
         self.builder
             .start_internal(Token::Alternative, Range(1, Some(1)));
         while let Ok(c) = self.next() {
@@ -292,18 +292,21 @@ impl<'a> PosixRegexBuilder<'a> {
                             // TODO: Handle collation characters properly,
                             // because currently idk what they are and only
                             // have the behavior of `grep` to go on.
-                            match self.next()? {
-                                b'.' => {
+                            match self.input.first() {
+                                Some(b'.') => {
+                                    self.consume(1);
                                     c = self.next()?;
                                     self.expect(b'.')?;
                                     self.expect(b']')?;
                                 }
-                                b'=' => {
+                                Some(b'=') => {
+                                    self.consume(1);
                                     c = self.next()?;
                                     self.expect(b'=')?;
                                     self.expect(b']')?;
                                 }
-                                b':' => {
+                                Some(b':') => {
+                                    self.consume(1);
                                     let end = self
                                         .input
                                         .iter()
@@ -320,7 +323,7 @@ impl<'a> PosixRegexBuilder<'a> {
                                     list.push(Collation::Class(class));
                                     push = false;
                                 }
-                                _ => return Err(Error::UnknownCollation),
+                                _ => ()
                             }
                         }
 
@@ -346,13 +349,14 @@ impl<'a> PosixRegexBuilder<'a> {
                     Token::OneOf { invert, list }
                 }
                 b'\\'
-                    if self
-                        .input
-                        .first()
-                        .map(|&c| c.is_ascii_digit())
-                        .unwrap_or(false) =>
+                    if !self.extended
+                        && self
+                            .input
+                            .first()
+                            .map(|&c| (b'1'..=b'9').contains(&c))
+                            .unwrap_or(false) =>
                 {
-                    let id = self.take_int()?.unwrap();
+                    let id = self.next().map(|c| (c - b'0') as u32).unwrap();
                     if (id as usize) >= self.group_id {
                         return Err(Error::InvalidBackRef(id));
                     }
@@ -363,14 +367,20 @@ impl<'a> PosixRegexBuilder<'a> {
                         let id = self.group_id;
                         self.group_id += 1;
                         let checkpoint = self.builder.checkpoint();
-                        self.parse()?;
+                        self.parse(true)?;
                         let range = self.parse_range()?;
                         self.builder
                             .start_internal_at(checkpoint, Token::Group(id), range);
                         self.builder.finish_internal();
                         continue;
                     }
-                    b')' if !self.extended => break,
+                    b')' if !self.extended => {
+                        if in_subgroup {
+                            break;
+                        } else {
+                            Token::Char(b')')
+                        }
+                    }
                     b'|' if !self.extended => {
                         self.builder.finish_internal();
                         self.builder
@@ -404,14 +414,20 @@ impl<'a> PosixRegexBuilder<'a> {
                     let id = self.group_id;
                     self.group_id += 1;
                     let checkpoint = self.builder.checkpoint();
-                    self.parse()?;
+                    self.parse(true)?;
                     let range = self.parse_range()?;
                     self.builder
                         .start_internal_at(checkpoint, Token::Group(id), range);
                     self.builder.finish_internal();
                     continue;
                 }
-                b')' if self.extended => break,
+                b')' if self.extended => {
+                    if in_subgroup {
+                        break;
+                    } else {
+                        Token::Char(b')')
+                    }
+                }
                 b'|' if self.extended => {
                     self.builder.finish_internal();
                     self.builder
@@ -668,6 +684,74 @@ Root 1..1
 "
         )
     }
+    #[test]
+    fn backref_is_single_digit() {
+        assert_eq!(
+            compile(br"\([abc]\)\12"),
+            "\
+Root 1..1
+  Alternative 1..1
+    Group(1) 1..1
+      Alternative 1..1
+        {invert: false, ['a', 'b', 'c']} 1..1
+    \\1 1..1
+    '2' 1..1
+"
+        )
+    }
+    #[test]
+    fn backref_not_zero() {
+        assert_eq!(
+            compile(br"\([abc]\)\0"),
+            "\
+Root 1..1
+  Alternative 1..1
+    Group(1) 1..1
+      Alternative 1..1
+        {invert: false, ['a', 'b', 'c']} 1..1
+    '0' 1..1
+"
+        )
+    }
+    #[test]
+    fn dangling_rparen() {
+        assert_eq!(
+            compile(br"a\)"),
+            "\
+Root 1..1
+  Alternative 1..1
+    'a' 1..1
+    ')' 1..1
+"
+        );
+    }
+    #[test]
+    fn bracket_nesting() {
+        assert_eq!(
+            compile(br"[][]"),
+            "\
+Root 1..1
+  Alternative 1..1
+    {invert: false, [']', '[']} 1..1
+"
+        );
+    }
+    #[test]
+    fn bracket_range() {
+        // NOTE: This differs from the os-test bracket-range test,
+        // but explicitly conforms to the POSIX spec which requires
+        // that ] come before - if they're both intended to be
+        // inside a bracket expression.
+        assert_eq!(
+            compile(br"[[Y-]]"),
+            "\
+Root 1..1
+  Alternative 1..1
+    {invert: false, ['[', 'Y', '-']} 1..1
+    ']' 1..1
+"
+        );
+    }
 
     fn compile_extended(input: &[u8]) -> String {
         format!(
@@ -893,6 +977,9 @@ Root 1..1
     }
     #[test]
     fn backref_extended() {
+        // NOTE 1: Backrefs don't exist in EREs, only BREs.
+        // NOTE 2: The behaviour of backslash-escaping a
+        //         non-special char is undefined in the POSIX spec.
         assert_eq!(
             compile_extended(br"([abc])\1"),
             "\
@@ -901,8 +988,20 @@ Root 1..1
     Group(1) 1..1
       Alternative 1..1
         {invert: false, ['a', 'b', 'c']} 1..1
-    \\1 1..1
+    '1' 1..1
 "
         )
+    }
+    #[test]
+    fn dangling_rparen_extended() {
+        assert_eq!(
+            compile_extended(br"a)"),
+            "\
+Root 1..1
+  Alternative 1..1
+    'a' 1..1
+    ')' 1..1
+"
+        );
     }
 }
