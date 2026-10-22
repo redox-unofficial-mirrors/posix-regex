@@ -109,6 +109,7 @@ pub enum Error {
     UnexpectedToken(u8),
     UnknownClass(Vec<u8>),
     UnknownCollation,
+    UnclosedSubgroup,
 }
 
 /// A regex builder struct
@@ -167,7 +168,7 @@ impl<'a> PosixRegexBuilder<'a> {
     }
     pub fn compile_tokens(mut self) -> Result<Tree, Error> {
         self.builder.start_internal(Token::Root, Range(1, Some(1)));
-        self.parse(false)?;
+        self.parse(0)?;
         self.builder.finish_internal();
         Ok(self.builder.finish())
     }
@@ -267,7 +268,7 @@ impl<'a> PosixRegexBuilder<'a> {
         }
         Ok(range)
     }
-    fn parse(&mut self, in_subgroup: bool) -> Result<(), Error> {
+    fn parse(&mut self, mut subgroup_depth: u32) -> Result<(), Error> {
         self.builder
             .start_internal(Token::Alternative, Range(1, Some(1)));
         while let Ok(c) = self.next() {
@@ -367,7 +368,7 @@ impl<'a> PosixRegexBuilder<'a> {
                         let id = self.group_id;
                         self.group_id += 1;
                         let checkpoint = self.builder.checkpoint();
-                        self.parse(true)?;
+                        self.parse(subgroup_depth + 1)?;
                         let range = self.parse_range()?;
                         self.builder
                             .start_internal_at(checkpoint, Token::Group(id), range);
@@ -375,7 +376,8 @@ impl<'a> PosixRegexBuilder<'a> {
                         continue;
                     }
                     b')' if !self.extended => {
-                        if in_subgroup {
+                        if subgroup_depth > 0 {
+                            subgroup_depth -= 1;
                             break;
                         } else {
                             Token::Char(b')')
@@ -414,7 +416,7 @@ impl<'a> PosixRegexBuilder<'a> {
                     let id = self.group_id;
                     self.group_id += 1;
                     let checkpoint = self.builder.checkpoint();
-                    self.parse(true)?;
+                    self.parse(subgroup_depth + 1)?;
                     let range = self.parse_range()?;
                     self.builder
                         .start_internal_at(checkpoint, Token::Group(id), range);
@@ -422,7 +424,8 @@ impl<'a> PosixRegexBuilder<'a> {
                     continue;
                 }
                 b')' if self.extended => {
-                    if in_subgroup {
+                    if subgroup_depth > 0 {
+                        subgroup_depth -= 1;
                         break;
                     } else {
                         Token::Char(b')')
@@ -438,6 +441,9 @@ impl<'a> PosixRegexBuilder<'a> {
             };
             let range = self.parse_range()?;
             self.builder.leaf(token, range);
+        }
+        if subgroup_depth > 0 && self.input.is_empty() {
+            return Err(Error::UnclosedSubgroup);
         }
         self.builder.finish_internal();
         Ok(())
@@ -763,6 +769,12 @@ Root 1..1
                 .expect("error compiling regex")
         )
     }
+    fn compile_extended_error(input: &[u8]) -> Result<Tree, Error> {
+        PosixRegexBuilder::new(input)
+            .with_default_classes()
+            .extended(true)
+            .compile_tokens()
+    }
 
     #[test]
     fn basic_extended() {
@@ -1003,5 +1015,19 @@ Root 1..1
     ')' 1..1
 "
         );
+    }
+    #[test]
+    fn dangling_open_subgroup_extended() {
+        match compile_extended_error(br"(") {
+            Err(Error::UnclosedSubgroup) => (),
+            other => assert!(false, "Unexpected non-error: {:?}", other)
+        }
+    }
+    #[test]
+    fn dangling_open_nested_subgroup_extended() {
+        match compile_extended_error(br"((x)") {
+            Err(Error::UnclosedSubgroup) => (),
+            other => assert!(false, "Unexpected non-error: {:?}", other)
+        }
     }
 }
