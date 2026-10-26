@@ -288,6 +288,7 @@ impl<'a> PosixRegexBuilder<'a> {
                         let mut c = self.next()?;
 
                         let mut push = true;
+                        let mut non_collation_char = false;
 
                         if c == b'[' {
                             // TODO: Handle collation characters properly,
@@ -301,12 +302,14 @@ impl<'a> PosixRegexBuilder<'a> {
                                     self.expect(b']')?;
                                 }
                                 Some(b'=') => {
+                                    non_collation_char = true;
                                     self.consume(1);
                                     c = self.next()?;
                                     self.expect(b'=')?;
                                     self.expect(b']')?;
                                 }
                                 Some(b':') => {
+                                    non_collation_char = true;
                                     self.consume(1);
                                     let end = self
                                         .input
@@ -324,19 +327,33 @@ impl<'a> PosixRegexBuilder<'a> {
                                     list.push(Collation::Class(class));
                                     push = false;
                                 }
-                                _ => ()
+                                _ => (),
                             }
                         }
 
                         if push {
                             list.push(Collation::Char(c));
 
-                            if self.input.first() == Some(&b'-') && self.input.get(1) != Some(&b']')
+                            if !non_collation_char
+                                && self.input.first() == Some(&b'-')
+                                && self.input.get(1) != Some(&b']')
                             {
                                 self.consume(1);
-                                let dest = self.next()?;
-                                for c in (c + 1)..=dest {
-                                    list.push(Collation::Char(c));
+
+                                let mut dest = self.next()?;
+                                if dest == b'[' && (Some(&b'.') == self.input.first()) {
+                                    self.consume(1);
+                                    dest = self.next()?;
+                                    self.expect(b'.')?;
+                                    self.expect(b']')?;
+                                }
+
+                                if c <= dest {
+                                    for c in (c + 1)..=dest {
+                                        list.push(Collation::Char(c));
+                                    }
+                                } else {
+                                    list.pop();
                                 }
                             }
                         }
@@ -758,6 +775,17 @@ Root 1..1
 "
         );
     }
+    #[test]
+    fn bracket_range_collation_character() {
+        assert_eq!(
+            compile(br"[[.a.]-[.c.]]"),
+            "\
+Root 1..1
+  Alternative 1..1
+    {invert: false, ['a', 'b', 'c']} 1..1
+"
+        );
+    }
 
     fn compile_extended(input: &[u8]) -> String {
         format!(
@@ -1020,14 +1048,38 @@ Root 1..1
     fn dangling_open_subgroup_extended() {
         match compile_extended_error(br"(") {
             Err(Error::UnclosedSubgroup) => (),
-            other => assert!(false, "Unexpected non-error: {:?}", other)
+            other => assert!(false, "Expected error, got this instead: {:?}", other),
         }
     }
     #[test]
     fn dangling_open_nested_subgroup_extended() {
         match compile_extended_error(br"((x)") {
             Err(Error::UnclosedSubgroup) => (),
-            other => assert!(false, "Unexpected non-error: {:?}", other)
+            other => assert!(false, "Expected error, got this instead: {:?}", other),
         }
+    }
+    #[test]
+    fn bracket_range_start_equivalence_class_extended() {
+        assert_eq!(
+            compile_extended(br"[[=a=]-c]"),
+            "\
+Root 1..1
+  Alternative 1..1
+    {invert: false, ['a', '-', 'c']} 1..1
+"
+        );
+    }
+    #[test]
+    fn bracket_range_end_equivalence_class_extended() {
+        // NOTE: The range a-[ should match nothing because [ comes before a
+        assert_eq!(
+            compile_extended(br"[a-[=c=]]"),
+            "\
+Root 1..1
+  Alternative 1..1
+    {invert: false, ['=', 'c', '=']} 1..1
+    ']' 1..1
+"
+        );
     }
 }
